@@ -58,3 +58,4 @@ export default {
 function json(data, status = 200) {
   return new Response(JSON.stringify(data, null, 2), { status, headers: CORS })
 }
+// Este bloque se agrega antes del return final
