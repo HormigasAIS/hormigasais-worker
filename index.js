@@ -1,11 +1,16 @@
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Content-Type": "application/json"
+}
+
 export default {
   async fetch(request, env) {
+    if (request.method === "OPTIONS") return new Response(null, { headers: CORS })
     const url = new URL(request.url)
     const path = url.pathname
 
-    if (path === "/") {
-      return json({ status: "HormigasAIS ONLINE", nodo: "A16-SanMiguel-SV", protocolo: "LBH v2.0" })
-    }
+    if (path === "/") return json({ status: "HormigasAIS ONLINE", nodo: "A16-SanMiguel-SV", protocolo: "LBH v2.0" })
 
     if (path.startsWith("/push/") && request.method === "POST") {
       const node = path.split("/")[2]
@@ -51,5 +56,5 @@ export default {
 }
 
 function json(data, status = 200) {
-  return new Response(JSON.stringify(data, null, 2), { status, headers: { "Content-Type": "application/json" } })
+  return new Response(JSON.stringify(data, null, 2), { status, headers: CORS })
 }
