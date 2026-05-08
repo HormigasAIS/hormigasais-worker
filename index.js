@@ -11,56 +11,73 @@ export default {
     const url = new URL(request.url)
     const path = url.pathname
 
-    // --- ENDPOINTS BASE ---
     if (path === "/") {
-      return json({ 
-        status: "HormigasAIS ONLINE", 
-        nodo: "A16-SanMiguel-SV", 
+      return json({
+        status: "HormigasAIS ONLINE",
+        nodo: "A16-SanMiguel-SV",
         protocolo: "LBH v2.0",
-        author: "CLHQ"
+        author: "CLHQ",
+        endpoints: ["/verify", "/seal", "/push/{node}", "/all", "/consensus"]
       })
     }
 
-    // --- ENDPOINT DE VERIFICACIÓN SOBERANA ---
     if (path === "/verify") {
-      return json({ 
-        status: "VALIDADO", 
-        signature: "CLHQ-MASTER-KEY", 
+      return json({
+        status: "VALIDADO",
+        signature: "CLHQ-MASTER-KEY",
         protocol: "Lenguaje-Binario-HormigasAIS",
         timestamp: new Date().toISOString(),
         origin: "Nodo-Soberano-A16"
       })
     }
 
-    // --- LÓGICA DE PUSH (RECEPCIÓN DE FEROMONAS) ---
+    if (path === "/seal" && request.method === "POST") {
+      try {
+        const body = await request.json()
+        const sello = {
+          owner: body.owner || "HormigasAIS",
+          asset: body.asset || "unknown",
+          hash: body.hash || "",
+          protocol: "Lenguaje-Binario-HormigasAIS",
+          timestamp: new Date().toISOString(),
+          nodo: "A16-SanMiguel-SV",
+          signature: "CLHQ-" + Math.random().toString(36).substring(2, 10).toUpperCase()
+        }
+        await env.PHEROMONES.put("seal:" + sello.signature, JSON.stringify(sello))
+        return json({ status: "SELLADO", sello })
+      } catch(e) { return json({ error: "Paquete LBH invalido" }, 400) }
+    }
+
+    if (path.startsWith("/seal/") && request.method === "GET") {
+      const sig = path.split("/")[2]
+      const data = await env.PHEROMONES.get("seal:" + sig, "json")
+      if (data) return json({ status: "VERIFICADO", sello: data })
+      return json({ error: "Sello no encontrado" }, 404)
+    }
+
     if (path.startsWith("/push/") && request.method === "POST") {
       const node = path.split("/")[2]
       try {
         const body = await request.json()
-        const data = { 
-          type: body.type || "learning", 
-          node, 
-          value: Number(body.value) || 0, 
-          trust: Number(body.trust) || 0.5, 
-          timestamp: new Date().toISOString() 
+        const data = {
+          type: body.type || "learning",
+          node,
+          value: Number(body.value) || 0,
+          trust: Number(body.trust) || 0.5,
+          timestamp: new Date().toISOString()
         }
-        
         await env.PHEROMONES.put(node, JSON.stringify(data))
-        
-        // Actualizar el índice de la colonia
         const raw = await env.PHEROMONES.get("__index__")
         let nodes = []
         if (raw) { try { nodes = JSON.parse(raw) } catch(e) {} }
-        if (!nodes.includes(node)) { 
+        if (!nodes.includes(node)) {
           nodes.push(node)
-          await env.PHEROMONES.put("__index__", JSON.stringify(nodes)) 
+          await env.PHEROMONES.put("__index__", JSON.stringify(nodes))
         }
-        
         return json({ ok: true, stored: data, nodes_total: nodes.length })
-      } catch(e) { return json({ error: "Invalid LBH Packet" }, 400) }
+      } catch(e) { return json({ error: "Paquete LBH invalido" }, 400) }
     }
 
-    // --- ENDPOINT DE LECTURA TOTAL ---
     if (path === "/all") {
       const raw = await env.PHEROMONES.get("__index__")
       let nodes = []
@@ -73,7 +90,6 @@ export default {
       return json(result)
     }
 
-    // --- LÓGICA DE CONSENSO DISTRIBUIDO ---
     if (path === "/consensus") {
       const raw = await env.PHEROMONES.get("__index__")
       let nodes = []
@@ -84,10 +100,10 @@ export default {
         if (data) { total += Number(data.value) || 0; count++ }
       }
       const promedio = count > 0 ? total / count : 0
-      return json({ 
-        consensus: promedio > 0.6 ? "ACEPTAR" : "RECHAZAR", 
-        promedio: promedio.toFixed(4), 
-        nodos: count 
+      return json({
+        consensus: promedio > 0.6 ? "ACEPTAR" : "RECHAZAR",
+        promedio: promedio.toFixed(4),
+        nodos: count
       })
     }
 
