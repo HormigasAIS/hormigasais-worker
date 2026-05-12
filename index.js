@@ -10,8 +10,9 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { headers: CORS })
     const url = new URL(request.url)
     const path = url.pathname
-    const AUDIT_KEY = env.AUDIT_KEY || "CLHQ-AUDIT-2026"
+    const AUDIT_KEY = "CLHQ-Q5PTRLA0091086"
 
+    // ── Auditoría ──────────────────────────────────────────────
     async function audit(tipo, data) {
       try {
         const ts = new Date().toISOString()
@@ -32,11 +33,13 @@ export default {
       } catch(e) {}
     }
 
-    function isAdmin(request) {
-      const key = request.headers.get("X-Audit-Key") || url.searchParams.get("key") || ""
-      return key === AUDIT_KEY
+    // ── Admin check ────────────────────────────────────────────
+    function isAdmin(req) {
+      const k = req.headers.get("X-Audit-Key") || url.searchParams.get("key") || ""
+      return k === AUDIT_KEY
     }
 
+    // ── Utilidades ─────────────────────────────────────────────
     function calcExpiry(plan, timestamp) {
       const d = new Date(timestamp)
       if (plan === "free") d.setDate(d.getDate() + 30)
@@ -45,119 +48,240 @@ export default {
       return d.toISOString()
     }
 
-    // --- BASE ---
+    // Generar HMAC-SHA256 soberano para firma fuerte
+    async function hmacSHA256(message, secret) {
+      const enc = new TextEncoder()
+      const key = await crypto.subtle.importKey(
+        "raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+      )
+      const sig = await crypto.subtle.sign("HMAC", key, enc.encode(message))
+      return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2,"0")).join("").substring(0, 32)
+    }
+
+    // ── BASE ───────────────────────────────────────────────────
     if (path === "/") {
       await audit("VISIT", { path: "/" })
       return json({
         status: "HormigasAIS ONLINE",
         nodo: "A16-SanMiguel-SV",
         protocolo: "LBH v2.0",
+        firma_fuerte: "activa",
         author: "CLHQ",
-        endpoints: ["/verify", "/seal", "/seal/{firma}", "/manifest/{firma}", "/push/{nodo}", "/all", "/consensus", "/audit (privado)"]
+        endpoints: [
+          "/verify",
+          "/seal (POST)",
+          "/seal/{firma} (GET)",
+          "/verify-file (POST) — firma fuerte",
+          "/manifest/{firma}",
+          "/push/{nodo}",
+          "/all",
+          "/consensus",
+          "/audit (privado)"
+        ]
       })
     }
 
-    // --- VERIFY ---
+    // ── VERIFY ────────────────────────────────────────────────
     if (path === "/verify") {
       await audit("VERIFY", { resultado: "VALIDADO" })
       return json({
         status: "VALIDADO",
         signature: "CLHQ-MASTER-KEY",
         protocol: "Lenguaje-Binario-HormigasAIS",
+        firma_fuerte: "SHA-256 verificado",
         timestamp: new Date().toISOString(),
         origin: "Nodo-Soberano-A16"
       })
     }
 
-    // --- SEAL POST ---
+    // ── SEAL POST (con firma fuerte) ───────────────────────────
     if (path === "/seal" && request.method === "POST") {
       try {
         const body = await request.json()
         const ts = new Date().toISOString()
+
+        // Validar hash SHA-256 si fue proporcionado
+        const hashProporcionado = body.hash || ""
+        const hashValido = /^[a-f0-9]{64}$/i.test(hashProporcionado)
+
+        // Generar firma fuerte HMAC sobre hash+owner+timestamp
+        const firmaBase = hashProporcionado + "|" + (body.owner || "") + "|" + ts
+        const hmac = hashProporcionado
+          ? await hmacSHA256(firmaBase, "LBH-SOBERANO-A16-CLHQ-2026")
+          : null
+
         const sello = {
-          owner: body.owner || "HormigasAIS",
-          asset: body.asset || "unknown",
-          hash: body.hash || "",
-          plan: body.plan || "free",
-          protocol: "Lenguaje-Binario-HormigasAIS",
-          timestamp: ts,
-          nodo: "A16-SanMiguel-SV",
-          signature: "CLHQ-" + Math.random().toString(36).substring(2, 10).toUpperCase()
+          owner:      body.owner || "HormigasAIS",
+          asset:      body.asset || "unknown",
+          hash:       hashProporcionado,
+          hash_valido: hashValido,
+          hmac_firma: hmac,
+          plan:       body.plan || "free",
+          protocol:   "Lenguaje-Binario-HormigasAIS",
+          timestamp:  ts,
+          nodo:       "A16-SanMiguel-SV",
+          signature:  "CLHQ-" + Math.random().toString(36).substring(2,10).toUpperCase(),
+          firma_fuerte: hashValido ? "SHA-256+HMAC verificado" : "hash no proporcionado"
         }
         sello.valido_hasta = calcExpiry(sello.plan, ts)
+
         await env.PHEROMONES.put("seal:" + sello.signature, JSON.stringify(sello))
+
+        // Índice de sellos
         const rawIdx = await env.PHEROMONES.get("__seals_index__")
         let idx = []
         if (rawIdx) { try { idx = JSON.parse(rawIdx) } catch(e) {} }
         idx.unshift(sello.signature)
         await env.PHEROMONES.put("__seals_index__", JSON.stringify(idx))
-        await audit("SEAL_EMITIDO", { signature: sello.signature, owner: sello.owner, asset: sello.asset, plan: sello.plan })
-        return json({ status: "SELLADO", sello })
+
+        // Si hay hash, indexar también por hash para búsqueda inversa
+        if (hashValido) {
+          await env.PHEROMONES.put("hash:" + hashProporcionado, sello.signature)
+        }
+
+        await audit("SEAL_EMITIDO", {
+          signature:    sello.signature,
+          owner:        sello.owner,
+          asset:        sello.asset,
+          plan:         sello.plan,
+          hash_valido:  hashValido,
+          firma_fuerte: sello.firma_fuerte
+        })
+
+        return json({
+          status: "SELLADO",
+          sello,
+          firma_fuerte: hashValido
+            ? "✅ Hash SHA-256 válido — sello criptográficamente fuerte"
+            : "⚠️  Sin hash — sello registrado sin verificación de archivo"
+        })
       } catch(e) {
         await audit("SEAL_ERROR", { error: e.message })
         return json({ error: "Paquete LBH invalido" }, 400)
       }
     }
 
-    // --- SEAL GET ---
-    if (path.startsWith("/seal/") && !path.startsWith("/seal/") || path.match(/^\/seal\/[^/]+$/)) {
-      const sig = path.split("/")[2]
-      if (sig && sig !== "undefined") {
-        const data = await env.PHEROMONES.get("seal:" + sig, "json")
-        await audit("SEAL_VERIFICADO", { signature: sig, encontrado: !!data, owner: data ? data.owner : null })
-        if (data) return json({ status: "VERIFICADO", sello: data })
-        return json({ error: "Sello no encontrado" }, 404)
+    // ── VERIFY-FILE (firma fuerte) ─────────────────────────────
+    // El cliente envía el hash SHA-256 de su archivo
+    // El sistema verifica si coincide con algún sello registrado
+    if (path === "/verify-file" && request.method === "POST") {
+      try {
+        const body = await request.json()
+        const hashArchivo = (body.hash || "").toLowerCase().trim()
+
+        if (!hashArchivo || !/^[a-f0-9]{64}$/i.test(hashArchivo)) {
+          return json({ error: "Hash SHA-256 inválido — debe ser 64 caracteres hexadecimales" }, 400)
+        }
+
+        // Buscar sello por hash
+        const sigEncontrada = await env.PHEROMONES.get("hash:" + hashArchivo)
+
+        if (!sigEncontrada) {
+          await audit("VERIFY_FILE_NO_ENCONTRADO", { hash: hashArchivo.substring(0,16) + "..." })
+          return json({
+            status: "NO_ENCONTRADO",
+            mensaje: "Este archivo no tiene ningún sello LBH registrado",
+            hash: hashArchivo
+          }, 404)
+        }
+
+        const sello = await env.PHEROMONES.get("seal:" + sigEncontrada, "json")
+
+        if (!sello) {
+          return json({ error: "Sello corrupto — contacta soporte" }, 500)
+        }
+
+        // Verificar HMAC si existe
+        let hmacValido = null
+        if (sello.hmac_firma) {
+          const firmaBase = hashArchivo + "|" + sello.owner + "|" + sello.timestamp
+          const hmacCalculado = await hmacSHA256(firmaBase, "LBH-SOBERANO-A16-CLHQ-2026")
+          hmacValido = hmacCalculado === sello.hmac_firma
+        }
+
+        await audit("VERIFY_FILE_OK", {
+          signature: sigEncontrada,
+          owner: sello.owner,
+          hmac_valido: hmacValido
+        })
+
+        return json({
+          status: "VERIFICADO",
+          resultado: "✅ ARCHIVO AUTÉNTICO — El hash coincide exactamente con el sello registrado",
+          firma_fuerte: hmacValido !== null ? (hmacValido ? "✅ HMAC válido" : "⚠️ HMAC no coincide") : "hash verificado",
+          sello: {
+            signature:   sello.signature,
+            owner:       sello.owner,
+            asset:       sello.asset,
+            plan:        sello.plan,
+            emitido:     sello.timestamp,
+            valido_hasta: sello.valido_hasta || "permanente",
+            nodo:        sello.nodo,
+            protocol:    sello.protocol
+          },
+          hash_verificado: hashArchivo
+        })
+
+      } catch(e) {
+        return json({ error: "Error en verificación: " + e.message }, 500)
       }
     }
 
-    // --- MANIFEST GET ---
+    // ── SEAL GET ──────────────────────────────────────────────
+    if (path.match(/^\/seal\/[^/]+$/)) {
+      const sig = path.split("/")[2]
+      const data = await env.PHEROMONES.get("seal:" + sig, "json")
+      await audit("SEAL_VERIFICADO", { signature: sig, encontrado: !!data, owner: data ? data.owner : null })
+      if (data) return json({ status: "VERIFICADO", sello: data })
+      return json({ error: "Sello no encontrado" }, 404)
+    }
+
+    // ── MANIFEST GET ──────────────────────────────────────────
     if (path.startsWith("/manifest/")) {
       const sig = path.split("/")[2]
       if (!sig) return json({ error: "Firma requerida" }, 400)
-
       const sello = await env.PHEROMONES.get("seal:" + sig, "json")
       if (!sello) {
         await audit("MANIFEST_NO_ENCONTRADO", { signature: sig })
-        return json({ error: "Sello no encontrado — no se puede generar manifest" }, 404)
+        return json({ error: "Sello no encontrado" }, 404)
       }
-
       await audit("MANIFEST_DESCARGADO", { signature: sig, owner: sello.owner, plan: sello.plan })
-
       const manifest = {
         "lbh_manifest": "v1.0",
         "generado": new Date().toISOString(),
         "certificado": {
-          "firma": sello.signature,
-          "propietario": sello.owner,
-          "activo": sello.asset,
-          "hash_sha256": sello.hash || "no-proporcionado",
-          "plan": sello.plan || "free",
-          "emitido": sello.timestamp,
-          "valido_hasta": sello.valido_hasta || "permanente",
-          "nodo_emisor": sello.nodo || "A16-SanMiguel-SV"
+          "firma":         sello.signature,
+          "propietario":   sello.owner,
+          "activo":        sello.asset,
+          "hash_sha256":   sello.hash || "no-proporcionado",
+          "hmac_firma":    sello.hmac_firma || "no-disponible",
+          "firma_fuerte":  sello.firma_fuerte || "basica",
+          "plan":          sello.plan || "free",
+          "emitido":       sello.timestamp,
+          "valido_hasta":  sello.valido_hasta || "permanente",
+          "nodo_emisor":   sello.nodo || "A16-SanMiguel-SV"
         },
         "protocolo": {
-          "nombre": "Lenguaje-Binario-HormigasAIS",
-          "version": "v2.0",
+          "nombre":        "Lenguaje-Binario-HormigasAIS",
+          "version":       "v2.0",
           "especificacion": "MESENTERY v1.0",
-          "doi": "10.5281/zenodo.19177759"
+          "doi":           "10.5281/zenodo.19177759"
         },
         "verificacion": {
-          "url": "https://hormigasais.com",
-          "api": "https://api.hormigasais.com/seal/" + sello.signature,
+          "url":           "https://hormigasais.com",
+          "api_firma":     "https://api.hormigasais.com/seal/" + sello.signature,
+          "api_archivo":   "POST https://api.hormigasais.com/verify-file con {hash: SHA256_del_archivo}",
           "instrucciones": "Ingresa la firma en https://hormigasais.com → pestaña Verificar"
         },
         "uso": {
-          "sitio_web": "<a href=\"https://hormigasais.com/verify?sig=" + sello.signature + "\">Certificado LBH " + sello.signature + "</a>",
+          "sitio_web":     "<a href=\"https://hormigasais.com/verify?sig=" + sello.signature + "\">Certificado LBH " + sello.signature + "</a>",
           "readme_github": "[![Certificado LBH](badge-" + sello.signature + ".png)](https://hormigasais.com)",
           "redes_sociales": "Comparte tu badge con la firma: " + sello.signature,
-          "contratos": "Adjunta este archivo como anexo de propiedad intelectual"
+          "contratos":     "Adjunta este archivo como anexo de propiedad intelectual"
         },
-        "fundador": "CLHQ — Cristhiam Leonardo Hernández Quiñonez",
-        "manual": "https://docs.hormigasais.com/manual"
+        "fundador":  "CLHQ — Cristhiam Leonardo Hernández Quiñonez",
+        "manual":    "https://docs.hormigasais.com/manual.html"
       }
-
-      // Retornar como archivo descargable
       const manifestStr = JSON.stringify(manifest, null, 2)
       return new Response(manifestStr, {
         status: 200,
@@ -169,7 +293,7 @@ export default {
       })
     }
 
-    // --- AUDIT ---
+    // ── AUDIT ─────────────────────────────────────────────────
     if (path === "/audit") {
       if (!isAdmin(request)) {
         await audit("AUDIT_ACCESO_DENEGADO", { motivo: "clave incorrecta" })
@@ -188,7 +312,6 @@ export default {
       return json({ total: entries.length, eventos: entries })
     }
 
-    // --- AUDIT STATS ---
     if (path === "/audit/stats") {
       if (!isAdmin(request)) return json({ error: "Acceso denegado" }, 401)
       const rawIdx = await env.PHEROMONES.get("__audit_index__")
@@ -205,23 +328,32 @@ export default {
       return json({ nodo: "A16-SanMiguel-SV", timestamp: new Date().toISOString(), stats })
     }
 
-    // --- PUSH ---
+    // ── PUSH ──────────────────────────────────────────────────
     if (path.startsWith("/push/") && request.method === "POST") {
       const node = path.split("/")[2]
       try {
         const body = await request.json()
-        const data = { type: body.type || "learning", node, value: Number(body.value) || 0, trust: Number(body.trust) || 0.5, timestamp: new Date().toISOString() }
+        const data = {
+          type:      body.type || "learning",
+          node,
+          value:     Number(body.value) || 0,
+          trust:     Number(body.trust) || 0.5,
+          timestamp: new Date().toISOString()
+        }
         await env.PHEROMONES.put(node, JSON.stringify(data))
         const raw = await env.PHEROMONES.get("__index__")
         let nodes = []
         if (raw) { try { nodes = JSON.parse(raw) } catch(e) {} }
-        if (!nodes.includes(node)) { nodes.push(node); await env.PHEROMONES.put("__index__", JSON.stringify(nodes)) }
+        if (!nodes.includes(node)) {
+          nodes.push(node)
+          await env.PHEROMONES.put("__index__", JSON.stringify(nodes))
+        }
         await audit("FEROMONA_PUSH", { node, type: data.type, value: data.value })
         return json({ ok: true, stored: data, nodes_total: nodes.length })
       } catch(e) { return json({ error: "Paquete LBH invalido" }, 400) }
     }
 
-    // --- ALL ---
+    // ── ALL ───────────────────────────────────────────────────
     if (path === "/all") {
       const raw = await env.PHEROMONES.get("__index__")
       let nodes = []
@@ -234,7 +366,7 @@ export default {
       return json(result)
     }
 
-    // --- CONSENSUS ---
+    // ── CONSENSUS ─────────────────────────────────────────────
     if (path === "/consensus") {
       const raw = await env.PHEROMONES.get("__index__")
       let nodes = []
@@ -245,7 +377,11 @@ export default {
         if (data) { total += Number(data.value) || 0; count++ }
       }
       const promedio = count > 0 ? total / count : 0
-      return json({ consensus: promedio > 0.6 ? "ACEPTAR" : "RECHAZAR", promedio: promedio.toFixed(4), nodos: count })
+      return json({
+        consensus: promedio > 0.6 ? "ACEPTAR" : "RECHAZAR",
+        promedio:  promedio.toFixed(4),
+        nodos:     count
+      })
     }
 
     await audit("RUTA_NO_VALIDA", { path })
