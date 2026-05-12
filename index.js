@@ -6,7 +6,7 @@ const CORS = {
 }
 
 // Clave de auditoría — se configura como variable de entorno en Cloudflare
-const AUDIT_SECRET = "CLHQ-Q5PTRLA01"
+const AUDIT_SECRET = "CLHQ-Q5PTRLA0091086"
 
 export default {
   async fetch(request, env) {
