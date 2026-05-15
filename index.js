@@ -469,6 +469,156 @@ export default {
       return json({ nodo: "A16-SanMiguel-SV", timestamp: new Date().toISOString(), stats })
     }
 
+
+    // ── XOXO GIFT — Generar tarjeta de regalo ─────────────────
+    if (path === "/xoxo/gift" && request.method === "POST") {
+      if (!isAdmin(request)) return json({ error: "Solo el Master CLHQ puede emitir tarjetas de regalo" }, 401)
+
+      try {
+        const body = await request.json()
+        const ts = new Date().toISOString()
+
+        // Generar código de regalo único
+        const rawCode = "REGALO|" + (body.plan || "premium") + "|" + ts + "|" + Math.random().toString(36)
+        const codeHash = await hmacSHA256(rawCode, "LBH-XOXO-REGALO-CLHQ-2026")
+        const giftCode = "REGALO-CLHQ-" + codeHash.substring(0, 8).toUpperCase()
+
+        const gift = {
+          codigo:     giftCode,
+          plan:       body.plan || "premium",
+          mensaje:    body.mensaje || "🎁 Bienvenido a la Colonia HormigasAIS",
+          destinatario: body.destinatario || "",
+          email:      body.email || "",
+          creado:     ts,
+          expiry_gift: new Date(Date.now() + 30*24*60*60*1000).toISOString(),
+          canjeado:   false,
+          creado_por: "CLHQ-MASTER"
+        }
+
+        await env.PHEROMONES.put("gift:" + giftCode, JSON.stringify(gift))
+
+        // Índice de regalos
+        const rawIdx = await env.PHEROMONES.get("__gifts_index__")
+        let idx = []
+        if (rawIdx) { try { idx = JSON.parse(rawIdx) } catch(e) {} }
+        idx.unshift(giftCode)
+        await env.PHEROMONES.put("__gifts_index__", JSON.stringify(idx))
+
+        await audit("XOXO_GIFT_CREADO", { codigo: giftCode, plan: gift.plan, destinatario: gift.destinatario })
+
+        return json({
+          status: "REGALO_CREADO",
+          gift,
+          instrucciones_email: {
+            asunto: "🎁 Tu regalo de HormigasAIS — Acceso " + gift.plan.toUpperCase(),
+            cuerpo: "¡" + (gift.mensaje) + "!\n\nTu código de regalo:\n" + giftCode + "\n\nPara canjearlo:\n1. Ve a https://hormigasais.com\n2. Pestaña 👤 Mi Cuenta\n3. Haz clic en 'Tengo un código de regalo'\n4. Ingresa: " + giftCode + "\n\nFirma: CLHQ\nhormigasais.com"
+          }
+        })
+      } catch(e) {
+        return json({ error: "Error al crear regalo: " + e.message }, 500)
+      }
+    }
+
+    // ── XOXO REDEEM — Canjear tarjeta de regalo ───────────────
+    if (path === "/xoxo/redeem" && request.method === "POST") {
+      try {
+        const body = await request.json()
+        const giftCode = (body.codigo || "").toUpperCase().trim()
+        const email = body.email || ""
+        const owner = body.owner || ""
+
+        if (!giftCode) return json({ error: "Código de regalo requerido" }, 400)
+
+        const gift = await env.PHEROMONES.get("gift:" + giftCode, "json")
+        if (!gift) return json({ error: "Código de regalo no encontrado" }, 404)
+        if (gift.canjeado) return json({ error: "Este código ya fue canjeado el " + gift.fecha_canje }, 400)
+
+        // Verificar expiración del código
+        if (new Date(gift.expiry_gift) < new Date()) {
+          return json({ error: "Este código de regalo ha expirado" }, 400)
+        }
+
+        // Registrar cliente automáticamente
+        const ts = new Date().toISOString()
+        const rawKey = email + "|" + ts + "|" + Math.random().toString(36)
+        const apiKeyHash = await hmacSHA256(rawKey, "LBH-CLIENTES-SOBERANOS-2026")
+        const apiKey = "LBH-" + apiKeyHash.substring(0, 6).toUpperCase() + "-" + apiKeyHash.substring(6, 12).toUpperCase()
+
+        const calcExpiry = (plan, fecha) => {
+          const d = new Date(fecha)
+          if (plan === "free") d.setDate(d.getDate() + 30)
+          else if (plan === "premium") d.setFullYear(d.getFullYear() + 1)
+          else return null
+          return d.toISOString()
+        }
+
+        const cliente = {
+          api_key:        apiKey,
+          email:          email || gift.email,
+          owner:          owner || gift.destinatario,
+          plan:           gift.plan,
+          fecha_inicio:   ts,
+          fecha_expiry:   gift.plan === "enterprise" ? null : calcExpiry(gift.plan, ts),
+          sellos_emitidos: 0,
+          sellos_limite:  gift.plan === "free" ? 3 : -1,
+          activo:         true,
+          pagado_via:     "regalo_clhq",
+          notas:          gift.mensaje + " | Código: " + giftCode
+        }
+
+        await env.PHEROMONES.put("client:" + apiKey, JSON.stringify(cliente))
+
+        // Actualizar índice de clientes
+        const rawClientIdx = await env.PHEROMONES.get("__clients_index__")
+        let clientIdx = []
+        if (rawClientIdx) { try { clientIdx = JSON.parse(rawClientIdx) } catch(e) {} }
+        clientIdx.unshift(apiKey)
+        await env.PHEROMONES.put("__clients_index__", JSON.stringify(clientIdx))
+
+        // Marcar regalo como canjeado
+        gift.canjeado = true
+        gift.fecha_canje = ts
+        gift.canjeado_por = email || owner
+        gift.api_key_generada = apiKey
+        await env.PHEROMONES.put("gift:" + giftCode, JSON.stringify(gift))
+
+        await audit("XOXO_GIFT_CANJEADO", { codigo: giftCode, plan: gift.plan, email, api_key: apiKey })
+
+        return json({
+          status: "REGALO_CANJEADO",
+          api_key: apiKey,
+          cliente: {
+            owner:    cliente.owner,
+            plan:     cliente.plan.toUpperCase(),
+            expiry:   cliente.fecha_expiry || "Permanente"
+          },
+          mensaje: "🎁 " + gift.mensaje,
+          instrucciones: "Usa tu API Key en hormigasais.com → 👤 Mi Cuenta"
+        })
+      } catch(e) {
+        return json({ error: "Error al canjear: " + e.message }, 500)
+      }
+    }
+
+    // ── XOXO LISTA — Ver todos los regalos (admin) ────────────
+    if (path === "/xoxo/lista") {
+      if (!isAdmin(request)) return json({ error: "Acceso denegado" }, 401)
+
+      const rawIdx = await env.PHEROMONES.get("__gifts_index__")
+      let idx = []
+      if (rawIdx) { try { idx = JSON.parse(rawIdx) } catch(e) {} }
+
+      const gifts = []
+      for (const code of idx) {
+        const g = await env.PHEROMONES.get("gift:" + code, "json")
+        if (g) gifts.push(g)
+      }
+
+      const canjeados = gifts.filter(g => g.canjeado).length
+      return json({ total: gifts.length, canjeados, pendientes: gifts.length - canjeados, regalos: gifts })
+    }
+
+
     await audit("RUTA_NO_VALIDA", { path })
     return json({ error: "Ruta LBH no valida" }, 404)
   }
