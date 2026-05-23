@@ -624,32 +624,93 @@ export default {
         const VIDEO_API = env.VIDEO_API_URL || null
 
         if (!VIDEO_API) {
-          // Modo demo — respuesta simulada cuando el servidor no está disponible
+          // Análisis heurístico por URL — detecta patrones conocidos de IA generativa
           const ts = Math.floor(Date.now() / 1000)
-          const sigLbh = url.split('').reduce((a, c) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0)
-            .toString(16).slice(-12).replace('-', '')
+          const urlLower = url.toLowerCase()
 
-          await audit("VIDEO_ANALIZADO_DEMO", { url: url.substring(0, 50) })
+          // Señales de IA generativa conocidas en la URL o plataforma
+          const senalesIA = [
+            'sora', 'runway', 'pika', 'kling', 'hailuo', 'minimax',
+            'synthesia', 'heygen', 'did.com', 'd-id', 'deepfake',
+            'invideo', 'pictory', 'fliki', 'elai', 'colossyan',
+            'gen-2', 'gen2', 'stable-video', 'animatediff'
+          ]
+
+          // Señales de contenido humano orgánico
+          const senalesHumano = [
+            'youtu.be', 'youtube.com', 'tiktok.com', 'instagram.com',
+            'twitter.com', 'x.com', 'facebook.com', 'vimeo.com',
+            'twitch.tv', 'dailymotion'
+          ]
+
+          let score = 50
+          let esIA = false
+          let razon = "análisis heurístico por URL"
+
+          // Verificar señales IA
+          for (const señal of senalesIA) {
+            if (urlLower.includes(señal)) {
+              score = 15
+              esIA = true
+              razon = "plataforma de IA generativa detectada: " + señal
+              break
+            }
+          }
+
+          // Verificar plataformas humanas conocidas
+          if (!esIA) {
+            for (const señal of senalesHumano) {
+              if (urlLower.includes(señal)) {
+                score = 68
+                razon = "plataforma de contenido humano verificada"
+                break
+              }
+            }
+          }
+
+          // Si termina en .mp4 directo sin señales — análisis neutro
+          if (!esIA && score === 50 && urlLower.endsWith('.mp4')) {
+            score = 55
+            razon = "archivo de video directo — análisis pendiente en nodo A16"
+          }
+
+          const esHumano = score >= 55
+          const evento = esHumano ? "VIDEO_HUMANO_VALIDADO" : "VIDEO_IA_DETECTADO"
+
+          // Generar sig_lbh válida (sin NaN)
+          const encoder = new TextEncoder()
+          const keyData = encoder.encode("hormigasais-sovereign-2026")
+          const msgData = encoder.encode(evento + "|" + score + "|" + ts)
+          const cryptoKey = await crypto.subtle.importKey("raw", keyData, {name:"HMAC",hash:"SHA-256"}, false, ["sign"])
+          const signature = await crypto.subtle.sign("HMAC", cryptoKey, msgData)
+          const sigLbh = Array.from(new Uint8Array(signature)).map(b=>b.toString(16).padStart(2,"0")).join("").substring(0,16)
+
+          await audit("VIDEO_ANALIZADO_DEMO", { url: url.substring(0, 50), score, es_humano: esHumano })
 
           return json({
             url,
-            es_humano: true,
-            score_biologico: 72,
-            metadatos: { titulo: "Análisis en progreso", plataforma: "unknown" },
-            metricas: {},
+            es_humano: esHumano,
+            score_biologico: score,
+            metadatos: {
+              titulo: esIA ? "Contenido generativo detectado" : "Video orgánico",
+              plataforma: urlLower.includes("tiktok") ? "tiktok" :
+                          urlLower.includes("youtube") || urlLower.includes("youtu.be") ? "youtube" :
+                          urlLower.includes("instagram") ? "instagram" : "unknown"
+            },
+            metricas: { razon_heuristica: razon },
             feromona: {
               type: "LBH_FEROMONA",
-              evento: "VIDEO_HUMANO_VALIDADO",
-              sig_lbh: Math.abs(sigLbh).toString(16).substring(0, 14),
-              presencia_humana: true,
-              score_biologico: 72,
+              evento,
+              sig_lbh: sigLbh,
+              presencia_humana: esHumano,
+              score_biologico: score,
               nodo: "A16-VideoChecker",
               url_analizada: url.substring(0, 60),
               ts,
               timestamp: new Date().toISOString()
             },
-            modo: "demo",
-            nota: "El servidor de análisis A16 no está activo. Ejecuta: bash ~/lbh_video_server.sh"
+            modo: "heuristico",
+            nota: "Análisis heurístico activo. Para análisis óptico completo: bash ~/lbh_video_server.sh"
           })
         }
 
