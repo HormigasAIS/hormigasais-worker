@@ -607,6 +607,70 @@ export default {
     }
 
 
+
+    // ── VIDEO INTELLIGENCE (proxy al nodo A16) ────────────────
+    if (path === "/video/analizar" && request.method === "POST") {
+      try {
+        const body = await request.json()
+        const url = (body.url || '').trim()
+
+        if (!url || !url.startsWith('http')) {
+          return json({ error: "URL inválida" }, 400)
+        }
+
+        // El Worker actúa como proxy hacia el servidor local del Nodo A16
+        // El Nodo A16 debe tener el servidor video corriendo en localhost:7890
+        // Para acceso público, se usa cloudflared tunnel o ngrok
+        const VIDEO_API = env.VIDEO_API_URL || null
+
+        if (!VIDEO_API) {
+          // Modo demo — respuesta simulada cuando el servidor no está disponible
+          const ts = Math.floor(Date.now() / 1000)
+          const sigLbh = url.split('').reduce((a, c) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0)
+            .toString(16).slice(-12).replace('-', '')
+
+          await audit("VIDEO_ANALIZADO_DEMO", { url: url.substring(0, 50) })
+
+          return json({
+            url,
+            es_humano: true,
+            score_biologico: 72,
+            metadatos: { titulo: "Análisis en progreso", plataforma: "unknown" },
+            metricas: {},
+            feromona: {
+              type: "LBH_FEROMONA",
+              evento: "VIDEO_HUMANO_VALIDADO",
+              sig_lbh: Math.abs(sigLbh).toString(16).substring(0, 14),
+              presencia_humana: true,
+              score_biologico: 72,
+              nodo: "A16-VideoChecker",
+              url_analizada: url.substring(0, 60),
+              ts,
+              timestamp: new Date().toISOString()
+            },
+            modo: "demo",
+            nota: "El servidor de análisis A16 no está activo. Ejecuta: bash ~/lbh_video_server.sh"
+          })
+        }
+
+        // Proxy al servidor local del Nodo A16
+        const AUDIT_KEY = env.AUDIT_KEY || ""
+        const resp = await fetch(VIDEO_API + "/analizar", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url, key: AUDIT_KEY })
+        })
+
+        const data = await resp.json()
+        await audit("VIDEO_ANALIZADO", { url: url.substring(0, 50), es_humano: data.es_humano })
+        return json(data)
+
+      } catch(e) {
+        return json({ error: "Error en análisis: " + e.message }, 500)
+      }
+    }
+
+
     // ── XOXO GIFT — Generar tarjeta de regalo ─────────────────
     if (path === "/xoxo/gift" && request.method === "POST") {
       if (!isAdmin(request)) return json({ error: "Solo el Master CLHQ puede emitir tarjetas de regalo" }, 401)
