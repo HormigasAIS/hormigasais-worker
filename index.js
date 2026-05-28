@@ -608,6 +608,37 @@ export default {
 
 
 
+
+    // ── VIDEO UPLOAD (archivo directo) ───────────────────────
+    if (path === "/video/upload" && request.method === "POST") {
+      try {
+        const body = await request.json()
+        const base64 = body.base64 || ''
+        const nombre = body.nombre || 'video.mp4'
+        const VIDEO_API = env.VIDEO_API_URL || null
+
+        if (!base64) return json({ error: "Sin datos de video" }, 400)
+        if (!VIDEO_API) return json({ error: "Servidor de análisis no disponible" }, 503)
+
+        // Enviar base64 al servidor local A16
+        const resp = await fetch(VIDEO_API + "/upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            base64,
+            nombre,
+            key: env.AUDIT_KEY || ""
+          })
+        })
+        const data = await resp.json()
+        await audit("VIDEO_UPLOAD_ANALIZADO", { nombre, es_humano: data.es_humano })
+        return json(data)
+      } catch(e) {
+        return json({ error: "Error: " + e.message }, 500)
+      }
+    }
+
+
     // ── VIDEO INTELLIGENCE (proxy al nodo A16) ────────────────
     if (path === "/video/analizar" && request.method === "POST") {
       try {
