@@ -763,6 +763,143 @@ export default {
     }
 
 
+
+    // ── EMAIL ENVIAR (admin) ──────────────────────────────────
+    if (path === "/email/enviar" && request.method === "POST") {
+      if (!isAdmin(request)) return json({ error: "Solo el Master CLHQ puede enviar correos" }, 401)
+
+      try {
+        const body = await request.json()
+        const { para, asunto, mensaje, nombre_destinatario } = body
+
+        if (!para || !asunto || !mensaje) {
+          return json({ error: "Faltan campos: para, asunto, mensaje" }, 400)
+        }
+
+        // Enviar via Resend API
+        const resendResponse = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            "Authorization": "Bearer " + env.RESEND_API_KEY,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            from: "HormigasAIS <clhq@hormigasais.com>",
+            to: [para],
+            subject: asunto,
+            html: `
+              <div style="font-family:monospace;background:#0a0a0a;color:#e8e8e8;padding:2rem;max-width:600px;margin:0 auto;border:1px solid #222;border-radius:8px;">
+                <div style="border-bottom:1px solid #222;padding-bottom:1rem;margin-bottom:1.5rem;">
+                  <div style="font-size:1.5rem;margin-bottom:0.5rem;">🐜 HormigasAIS</div>
+                  <div style="color:#555;font-size:0.8rem;">Protocolo LBH v2.0 — Nodo A16-SanMiguel-SV</div>
+                </div>
+                ${nombre_destinatario ? '<div style="color:#f5c518;margin-bottom:1rem;">Hola, ' + nombre_destinatario + '</div>' : ''}
+                <div style="line-height:1.8;color:#aaa;white-space:pre-line;">${mensaje}</div>
+                <div style="border-top:1px solid #222;margin-top:2rem;padding-top:1rem;color:#555;font-size:0.75rem;">
+                  <div>Firma: <span style="color:#f5c518;">CLHQ — Cristhiam Leonardo Hernández Quiñonez</span></div>
+                  <div>Verificar en: <a href="https://hormigasais.com" style="color:#f5c518;">hormigasais.com</a></div>
+                  <div>DOI: 10.5281/zenodo.19177759</div>
+                </div>
+              </div>
+            `
+          })
+        })
+
+        const resendData = await resendResponse.json()
+
+        if (resendData.id) {
+          await audit("EMAIL_ENVIADO", {
+            para,
+            asunto,
+            resend_id: resendData.id
+          })
+          return json({
+            status: "EMAIL_ENVIADO",
+            resend_id: resendData.id,
+            para,
+            asunto,
+            timestamp: new Date().toISOString()
+          })
+        } else {
+          await audit("EMAIL_ERROR", { para, error: JSON.stringify(resendData) })
+          return json({ error: "Error Resend: " + JSON.stringify(resendData) }, 500)
+        }
+      } catch(e) {
+        return json({ error: "Error enviando email: " + e.message }, 500)
+      }
+    }
+
+    // ── EMAIL BIENVENIDA CLIENTE (admin) ──────────────────────
+    if (path === "/email/bienvenida" && request.method === "POST") {
+      if (!isAdmin(request)) return json({ error: "Acceso denegado" }, 401)
+
+      try {
+        const body = await request.json()
+        const { email, owner, api_key, plan } = body
+
+        if (!email || !api_key) return json({ error: "Faltan email y api_key" }, 400)
+
+        const planTexto = {
+          free: "Free — 3 sellos / 30 días",
+          premium: "Premium — Ilimitado / 1 año",
+          enterprise: "Enterprise — Ilimitado / Permanente"
+        }[plan] || plan
+
+        const resendResponse = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            "Authorization": "Bearer " + env.RESEND_API_KEY,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            from: "HormigasAIS <clhq@hormigasais.com>",
+            to: [email],
+            subject: "🐜 Tu acceso LBH está activo — HormigasAIS",
+            html: `
+              <div style="font-family:monospace;background:#0a0a0a;color:#e8e8e8;padding:2rem;max-width:600px;margin:0 auto;border:1px solid #222;border-radius:8px;">
+                <div style="border-bottom:1px solid #222;padding-bottom:1rem;margin-bottom:1.5rem;">
+                  <div style="font-size:1.5rem;margin-bottom:0.5rem;">🐜 HormigasAIS</div>
+                  <div style="color:#555;font-size:0.8rem;">Protocolo LBH v3.0</div>
+                </div>
+                <div style="color:#f5c518;font-size:1.1rem;margin-bottom:1rem;">¡Bienvenido a la Colonia, ${owner || 'Arquitecto de Contenido'}!</div>
+                <div style="color:#aaa;margin-bottom:1.5rem;line-height:1.8;">Tu plan está activo. Ahora puedes certificar tus activos digitales con el Protocolo LBH.</div>
+                <div style="background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:1.2rem;margin-bottom:1.5rem;">
+                  <div style="color:#555;font-size:0.75rem;margin-bottom:0.5rem;text-transform:uppercase;">TU API KEY</div>
+                  <div style="color:#f5c518;font-size:1rem;letter-spacing:0.1em;">${api_key}</div>
+                  <div style="color:#555;font-size:0.75rem;margin-top:0.5rem;">Plan: ${planTexto}</div>
+                </div>
+                <div style="color:#aaa;line-height:1.8;margin-bottom:1.5rem;">
+                  <strong style="color:#fff;">Para acceder a tu dashboard:</strong><br>
+                  1. Ve a <a href="https://hormigasais.com" style="color:#f5c518;">hormigasais.com</a><br>
+                  2. Pestaña 👤 Mi Cuenta<br>
+                  3. Ingresa tu API Key<br>
+                </div>
+                <div style="background:rgba(255,68,68,0.06);border:1px solid rgba(255,68,68,0.2);border-radius:6px;padding:0.8rem;margin-bottom:1.5rem;font-size:0.8rem;color:#aaa;">
+                  ⚠️ Guarda tu API Key en un lugar seguro. No la compartas públicamente.
+                </div>
+                <div style="border-top:1px solid #222;padding-top:1rem;color:#555;font-size:0.75rem;">
+                  <div>Firma: <span style="color:#f5c518;">CLHQ — Cristhiam Leonardo Hernández Quiñonez</span></div>
+                  <div>hormigasais.com | DOI: 10.5281/zenodo.19177759</div>
+                </div>
+              </div>
+            `
+          })
+        })
+
+        const resendData = await resendResponse.json()
+
+        if (resendData.id) {
+          await audit("EMAIL_BIENVENIDA_ENVIADO", { email, plan, resend_id: resendData.id })
+          return json({ status: "BIENVENIDA_ENVIADA", resend_id: resendData.id, para: email })
+        } else {
+          return json({ error: "Error Resend: " + JSON.stringify(resendData) }, 500)
+        }
+      } catch(e) {
+        return json({ error: e.message }, 500)
+      }
+    }
+
+
     // ── XOXO GIFT — Generar tarjeta de regalo ─────────────────
     if (path === "/xoxo/gift" && request.method === "POST") {
       if (!isAdmin(request)) return json({ error: "Solo el Master CLHQ puede emitir tarjetas de regalo" }, 401)
