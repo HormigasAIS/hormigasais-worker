@@ -36,7 +36,7 @@ export default {
     function calcExpiry(plan, fechaInicio) {
       const d = new Date(fechaInicio)
       if (plan === "free") d.setDate(d.getDate() + 30)
-      else if (plan === "premium") d.setFullYear(d.getFullYear() + 1)
+      else if (plan === "premium") d.setMonth(d.getMonth() + 1)
       else return null
       return d.toISOString()
     }
@@ -977,7 +977,7 @@ export default {
         const calcExpiry = (plan, fecha) => {
           const d = new Date(fecha)
           if (plan === "free") d.setDate(d.getDate() + 30)
-          else if (plan === "premium") d.setFullYear(d.getFullYear() + 1)
+          else if (plan === "premium") d.setMonth(d.getMonth() + 1)
           else return null
           return d.toISOString()
         }
