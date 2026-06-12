@@ -36,7 +36,7 @@ export default {
     function calcExpiry(plan, fechaInicio) {
       const d = new Date(fechaInicio)
       if (plan === "free") d.setDate(d.getDate() + 30)
-      else if (plan === "premium") d.setMonth(d.getMonth() + 1)
+      else if (plan === "premium") d.setFullYear(d.getFullYear() + 1)
       else return null
       return d.toISOString()
     }
@@ -547,9 +547,9 @@ export default {
         if (!email || !api_key) return json({ error: "Faltan email y api_key" }, 400)
 
         const planTexto = {
-          free: "Free — 3 sellos / 30 días",
-          premium: "Premium — Ilimitado / 1 año",
-          enterprise: "Enterprise — Ilimitado / Permanente"
+          free: "Free — 3 sellos / válido 30 días",
+          premium: "Premium — Ilimitado / 1 año renovable ($10/mes)",
+          enterprise: "Enterprise — Permanente / API masiva ($49/mes)"
         }[plan] || plan
 
         const resendResponse = await fetch("https://api.resend.com/emails", {
@@ -840,9 +840,9 @@ export default {
         if (!email || !api_key) return json({ error: "Faltan email y api_key" }, 400)
 
         const planTexto = {
-          free: "Free — 3 sellos / 30 días",
-          premium: "Premium — Ilimitado / 1 año",
-          enterprise: "Enterprise — Ilimitado / Permanente"
+          free: "Free — 3 sellos / válido 30 días",
+          premium: "Premium — Ilimitado / 1 año renovable ($10/mes)",
+          enterprise: "Enterprise — Permanente / API masiva ($49/mes)"
         }[plan] || plan
 
         const resendResponse = await fetch("https://api.resend.com/emails", {
@@ -977,7 +977,7 @@ export default {
         const calcExpiry = (plan, fecha) => {
           const d = new Date(fecha)
           if (plan === "free") d.setDate(d.getDate() + 30)
-          else if (plan === "premium") d.setMonth(d.getMonth() + 1)
+          else if (plan === "premium") d.setFullYear(d.getFullYear() + 1)
           else return null
           return d.toISOString()
         }
