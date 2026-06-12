@@ -36,7 +36,7 @@ export default {
     function calcExpiry(plan, fechaInicio) {
       const d = new Date(fechaInicio)
       if (plan === "free") d.setDate(d.getDate() + 30)
-      else if (plan === "premium") d.setFullYear(d.getFullYear() + 1)
+      else if (plan === "premium" || plan === "enterprise") d.setMonth(d.getMonth() + 6)
       else return null
       return d.toISOString()
     }
@@ -128,6 +128,7 @@ export default {
           sellos_emitidos: 0,
           sellos_limite:  plan === "free" ? 3 : -1,
           activo:         true,
+          ciclo:          body.ciclo || 1,
           pagado_via:     body.pagado_via || "manual",
           notas:          body.notas || ""
         }
@@ -206,7 +207,9 @@ export default {
           fecha_expiry:   cliente.fecha_expiry || "Permanente",
           dias_restantes: diasRestantes !== null ? diasRestantes + " días" : "Permanente",
           sellos_emitidos: misSellos.length,
-          sellos_limite:  cliente.sellos_limite === -1 ? "Ilimitados" : cliente.sellos_limite
+          sellos_limite:  cliente.sellos_limite === -1 ? "Ilimitados" : cliente.sellos_limite,
+          ciclo:          cliente.ciclo || 1,
+          validez_activos: (cliente.plan === "free") ? "30 dias" : ((cliente.ciclo||1) >= 2) ? "1 ano" : "6 meses"
         },
         mis_sellos: misSellos,
         acciones: {
@@ -306,7 +309,7 @@ export default {
         const expiryFn = (p, t) => {
           const d = new Date(t)
           if (p === "free") d.setDate(d.getDate() + 30)
-          else if (p === "premium") d.setFullYear(d.getFullYear() + 1)
+          else if (p === "premium" || p === "enterprise") d.setMonth(d.getMonth() + 6)
           else return null
           return d.toISOString()
         }
@@ -438,6 +441,36 @@ export default {
       for (const node of nodes) { const data = await env.PHEROMONES.get(node, "json"); if (data) { total += Number(data.value) || 0; count++ } }
       const promedio = count > 0 ? total / count : 0
       return json({ consensus: promedio > 0.6 ? "ACEPTAR" : "RECHAZAR", promedio: promedio.toFixed(4), nodos: count })
+    }
+
+
+    // ── CLIENTE RENOVAR (admin) ───────────────────────────────
+    if (path === "/cliente/renovar" && request.method === "POST") {
+      if (!isAdmin(request)) return json({ error: "Acceso denegado" }, 401)
+      try {
+        const body = await request.json()
+        const { api_key } = body
+        if (!api_key) return json({ error: "api_key requerida" }, 400)
+        const cliente = await env.PHEROMONES.get("client:" + api_key, "json")
+        if (!cliente) return json({ error: "Cliente no encontrado" }, 404)
+        const cicloAnterior = cliente.ciclo || 1
+        cliente.ciclo = cicloAnterior + 1
+        const d = new Date()
+        if (cliente.ciclo >= 2) d.setFullYear(d.getFullYear() + 1)
+        else d.setMonth(d.getMonth() + 6)
+        cliente.fecha_expiry = d.toISOString()
+        cliente.fecha_renovacion = new Date().toISOString()
+        await env.PHEROMONES.put("client:" + api_key, JSON.stringify(cliente))
+        await audit("CLIENTE_RENOVADO", { api_key, ciclo_anterior: cicloAnterior, ciclo_nuevo: cliente.ciclo, plan: cliente.plan, nueva_expiry: cliente.fecha_expiry })
+        return json({
+          status: "RENOVADO",
+          api_key,
+          plan: cliente.plan,
+          ciclo: cliente.ciclo,
+          fecha_expiry: cliente.fecha_expiry,
+          validez: cliente.ciclo >= 2 ? "1 ano completo" : "6 meses"
+        })
+      } catch(e) { return json({ error: e.message }, 500) }
     }
 
     // ── AUDIT ─────────────────────────────────────────────────
@@ -977,7 +1010,7 @@ export default {
         const calcExpiry = (plan, fecha) => {
           const d = new Date(fecha)
           if (plan === "free") d.setDate(d.getDate() + 30)
-          else if (plan === "premium") d.setFullYear(d.getFullYear() + 1)
+          else if (plan === "premium" || plan === "enterprise") d.setMonth(d.getMonth() + 6)
           else return null
           return d.toISOString()
         }
