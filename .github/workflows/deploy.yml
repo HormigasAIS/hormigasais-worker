@@ -8,11 +8,14 @@ jobs:
   deploy:
     runs-on: ubuntu-22.04
     steps:
-      - name: Descargar código del repositorio
+      - name: Descargar repositorio
         uses: actions/checkout@v4
 
-      - name: Publicar Worker en Cloudflare
+      - name: Desplegar a Cloudflare Workers
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CF_API_TOKEN }}
           accountId: ${{ secrets.CF_ACCOUNT_ID }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}

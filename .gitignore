@@ -3,3 +3,4 @@ node_modules/
 .wrangler/
 dist/
 LBH_BACKUPS/
+_tmp/
