@@ -10,7 +10,7 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { headers: CORS })
     const url = new URL(request.url)
     const path = url.pathname
-    const AUDIT_KEY = "CLHQ-Q5PTRLA0091086"
+    const AUDIT_KEY = env.AUDIT_KEY || ""
 
     // ── Utilidades ─────────────────────────────────────────────
     async function audit(tipo, data) {
@@ -77,6 +77,25 @@ export default {
       if (!apiKey) return null
       const data = await env.PHEROMONES.get("client:" + apiKey, "json")
       return data
+    }
+
+
+    async function readUpstreamJson(resp) {
+      const contentType = resp.headers.get("content-type") || ""
+      const raw = await resp.text()
+      let data = null
+      try {
+        data = raw ? JSON.parse(raw) : null
+      } catch (_) {
+        data = null
+      }
+      const validObject = data !== null && typeof data === "object" && !Array.isArray(data)
+      return {
+        ok: resp.ok && validObject,
+        status: resp.status,
+        contentType,
+        data: validObject ? data : null
+      }
     }
 
     function getApiKey(req) {
@@ -313,7 +332,14 @@ export default {
           else return null
           return d.toISOString()
         }
-        sello.valido_hasta = expiryFn(sello.plan, ts)
+
+        // Sello soberano CLHQ: solo con header secreto válido, sin vencimiento.
+        // No afecta el flujo de clientes Free/Premium/Enterprise.
+        const masterKeyHeader = request.headers.get("X-LBH-Master-Key")
+        const esSoberano = !!masterKeyHeader && !!env.MASTER_SEAL_KEY && masterKeyHeader === env.MASTER_SEAL_KEY
+
+        sello.valido_hasta = esSoberano ? null : expiryFn(sello.plan, ts)
+        if (esSoberano) sello.sello_tipo = "SOBERANO-PERMANENTE"
 
         await env.PHEROMONES.put("seal:" + sello.signature, JSON.stringify(sello))
         const rawIdx = await env.PHEROMONES.get("__seals_index__")
@@ -406,8 +432,15 @@ export default {
       return json(respuesta)
     }
 
-    // ── PUSH ──────────────────────────────────────────────────
+    // ── PUSH BLINDADO (LBH v2.0) ──────────────────────────────
     if (path.startsWith("/push/") && request.method === "POST") {
+      const tokenRecibido = request.headers.get("X-Hormigas-Token")
+      const secretMaster = env.PUSH_SECRET || "token_soberano_lbh_2026"
+      if (!tokenRecibido || tokenRecibido !== secretMaster) {
+        await audit("PUSH_DENEGADO", { path })
+        return json({ error: "Acceso denegado: Token de soberanía LBH inválido" }, 401)
+      }
+
       const node = path.split("/")[2]
       try {
         const body = await request.json()
@@ -648,7 +681,7 @@ export default {
         const body = await request.json()
         const base64 = body.base64 || ''
         const nombre = body.nombre || 'video.mp4'
-        const VIDEO_API = env.VIDEO_API_URL || null
+        const VIDEO_API = env.VIDEO_API_URL || "https://a16.hormigasais.com/video/analizar"
 
         if (!base64) return json({ error: "Sin datos de video" }, 400)
         if (!VIDEO_API) return json({ error: "Servidor de análisis no disponible" }, 503)
@@ -663,7 +696,15 @@ export default {
             key: env.AUDIT_KEY || ""
           })
         })
-        const data = await resp.json()
+        const upstream = await readUpstreamJson(resp)
+        if (!upstream.ok) {
+          return json({
+            error: "Servidor de análisis no disponible",
+            upstream_status: upstream.status,
+            upstream_content_type: upstream.contentType || "desconocido"
+          }, 502)
+        }
+        const data = upstream.data
         await audit("VIDEO_UPLOAD_ANALIZADO", { nombre, es_humano: data.es_humano })
         return json(data)
       } catch(e) {
@@ -685,9 +726,8 @@ export default {
         // El Worker actúa como proxy hacia el servidor local del Nodo A16
         // El Nodo A16 debe tener el servidor video corriendo en localhost:7890
         // Para acceso público, se usa cloudflared tunnel o ngrok
-        const VIDEO_API = env.VIDEO_API_URL || null
-
-        if (!VIDEO_API) {
+        // Enrutamiento directo al motor multiagente soberano del Nodo A16
+        const VIDEO_API = env.VIDEO_API_URL || "http://localhost:8787/video/analizar";
           // Análisis heurístico por URL — detecta patrones conocidos de IA generativa
           const ts = Math.floor(Date.now() / 1000)
           const urlLower = url.toLowerCase()
@@ -786,7 +826,15 @@ export default {
           body: JSON.stringify({ url, key: AUDIT_KEY })
         })
 
-        const data = await resp.json()
+        const upstream = await readUpstreamJson(resp)
+        if (!upstream.ok) {
+          return json({
+            error: "Servidor de análisis no disponible",
+            upstream_status: upstream.status,
+            upstream_content_type: upstream.contentType || "desconocido"
+          }, 502)
+        }
+        const data = upstream.data
         await audit("VIDEO_ANALIZADO", { url: url.substring(0, 50), es_humano: data.es_humano })
         return json(data)
 
