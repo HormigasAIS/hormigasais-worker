@@ -2,16 +2,18 @@ name: Deploy HormigasAIS Worker
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - test/*
 
 jobs:
   deploy:
     runs-on: ubuntu-22.04
     steps:
-      - name: Descargar repositorio
+      - name: Descargar código del repositorio
         uses: actions/checkout@v4
 
-      - name: Desplegar a Cloudflare Workers
+      - name: Publicar Worker en Cloudflare
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CF_API_TOKEN }}

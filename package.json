@@ -1,0 +1,24 @@
+{
+  "name": "hormigasais-worker",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HormigasAIS/hormigasais-worker.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/HormigasAIS/hormigasais-worker/issues"
+  },
+  "homepage": "https://github.com/HormigasAIS/hormigasais-worker#readme",
+  "dependencies": {
+    "ws": "^8.21.3"
+  }
+}
