@@ -435,13 +435,16 @@ export default {
     // ── PUSH BLINDADO (LBH v2.0) ──────────────────────────────
     if (path.startsWith("/push/") && request.method === "POST") {
       const tokenRecibido = request.headers.get("X-Hormigas-Token")
-      const secretMaster = env.PUSH_SECRET || "token_soberano_lbh_2026"
+      const secretMaster = env.PUSH_SECRET || ""
       if (!tokenRecibido || tokenRecibido !== secretMaster) {
         await audit("PUSH_DENEGADO", { path })
         return json({ error: "Acceso denegado: Token de soberanía LBH inválido" }, 401)
       }
 
       const node = path.split("/")[2]
+      if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,31}$/.test(node || "")) {
+        return json({ error: "Nombre de nodo inválido" }, 400)
+      }
       try {
         const body = await request.json()
         const data = { type: body.type || "learning", node, value: Number(body.value) || 0, trust: Number(body.trust) || 0.5, timestamp: new Date().toISOString() }
@@ -726,8 +729,9 @@ export default {
         // El Worker actúa como proxy hacia el servidor local del Nodo A16
         // El Nodo A16 debe tener el servidor video corriendo en localhost:7890
         // Para acceso público, se usa cloudflared tunnel o ngrok
-        // Enrutamiento directo al motor multiagente soberano del Nodo A16
-        const VIDEO_API = env.VIDEO_API_URL || "http://localhost:8787/video/analizar";
+        const VIDEO_API = env.VIDEO_API_URL || null
+
+        if (!VIDEO_API) {
           // Análisis heurístico por URL — detecta patrones conocidos de IA generativa
           const ts = Math.floor(Date.now() / 1000)
           const urlLower = url.toLowerCase()
